@@ -1,0 +1,19 @@
+// Single producer, Single consumer queue
+
+start with 10 slots - slot does not move, slots have states
+stage 1 - slot accepts a u64
+
+head and tail are logical positions on a fixed size circular ring buffer
+slot is only safe to reuse if the consumer has advanced past the message that was in slot
+better to keep head and tail as monotonically increasing counters
+
+producer modifies head
+consumer modifies tail
+
+head == tail ==> ring is empty
+head != tail ==> message is in ring
+head - tail == capacity ==> ring is full
+slot = position % capacity
+head % capacity ==> logical position in circular buffer 
+range [tail, head] represents the messages currently in the ring
+head >= tail => producer never goes backwards
