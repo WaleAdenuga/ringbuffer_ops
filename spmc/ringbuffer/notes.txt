@@ -1,0 +1,17 @@
+// Single producer,  Multiple consumer queue
+
+Now tail is no longer owned by one consumer (or thread)
+tail.store() worked when there was one thread
+
+but now multiple threads could simultaneously observe
+==> we need genuine atomic position claiming, not just atomic publication
+
+this is where cas comes in (compare and swap)
+load tail -> calculate next tail -> CAS tail: (change from 10 to 11 but only if it's still 10)
+
+if another consumer got there first, CAS fails and we retry
+step goes:
+
+determine whether an item exists
+atomically claim that item
+only the successful claimant reads the slot
