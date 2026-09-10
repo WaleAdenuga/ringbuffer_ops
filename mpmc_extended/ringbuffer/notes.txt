@@ -1,0 +1,52 @@
+Extending the ringbuffer to be more like a messaging queue
+
+Separating the ringbuffer from messages.
+RingBuffer<T> remains generic but let's add a fixed message representation
+and decide what exactly is in a slot
+
+
+// Notes from mpmc land
+// Multi producer, multi consumer queue
+
+Now a single producer cannot just own the head
+for consumer, we added CAS for claiming tail
+now we have to do the same for head
+
+however you have to know when the producer can claim a position vs when the slot is actually available
+
+note in mpmc:
+head >= tail can't be the primary determinator of whether a producer can enqueue
+e.g. having head -tail = buffer size check at the top.
+got this:
+thread '<unnamed>' (32176) panicked at src\buffer.rs:69:16:
+attempt to subtract with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Current tail: 1757
+
+principles from spsc don't realy apply anymore:
+head/tail
+    ↓
+logical reservation positions
+
+seqno
+    ↓
+per-slot ownership/publication/reclamation
+
+main thing is producer has to be based on seqno vs current_head
+rather than head vs tail
+
+difference = seqno - head
+
+0       → producer owns/available position
+< 0     → slot is still occupied → full
+> 0     → another lifecycle state → retry
+
+
+Same logic can be applied to reading
+
+
+difference = seqno - (tail + 1)
+
+0       → consumer owns/available position
+< 0     → slot is probably empty
+> 0     → another lifecycle state → retry
