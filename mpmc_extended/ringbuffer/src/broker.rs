@@ -13,13 +13,13 @@ use crate::agent::Agent;
 // Agents go through the broker for publishing/writing while the broker handles the notification stream
 // Agent Registration also goes through the broker
 pub struct Broker {
-    buffer: RingBuffer<Message>,
+    buffer: RingBuffer,
     registry: Mutex<Registry>, // so registry can be updated when agents subscribe/unsubscribe to topics
 }
 
 impl Broker {
 
-    pub fn new(buffer: RingBuffer<Message>) -> Arc<Self> {
+    pub fn new(buffer: RingBuffer) -> Arc<Self> {
         Arc::new(Self { 
             buffer, 
             registry: Registry::new().into(),

@@ -9,14 +9,16 @@ pub struct AgentDetails {
     pub read_cursor: AtomicU64,
     pub subscriptions: HashSet<MessageTopic>,
     pub listener: Arc<Event>,
+    pub agent_bit: u64,
 }
 
 impl AgentDetails {
-    pub fn new(listener: Arc<Event>) -> Self {
+    pub fn new(listener: Arc<Event>, agent_bit: u64) -> Self {
         Self { 
             read_cursor: AtomicU64::new(0), 
             subscriptions: HashSet::new(), 
-            listener
+            listener,
+            agent_bit
         }
     }
 }
@@ -26,6 +28,11 @@ pub struct Registry {
     // map of all agents subscribed to a topic
     registry: HashMap<MessageTopic, Vec<Uuid>>,
     agents: HashMap<Uuid, AgentDetails>, // Keep register of all agents
+
+    // free/allocated bits
+    // 1 - position is occupied
+    // 0 - position is free
+    allocated_bits: u64,
 }
 
 #[derive(Debug)]
@@ -40,6 +47,7 @@ pub enum RegistryError {
     AgentNotRecognized,
     AgentNotSubscribed,
     AgentNotReachable,
+    NoAvailablePosition,
 }
 
 impl Registry {
@@ -47,7 +55,8 @@ impl Registry {
     pub fn new() -> Self {
         Self { 
             registry: HashMap::new(), 
-            agents: HashMap::new(), 
+            agents: HashMap::new(),
+            allocated_bits: 0,  // 
         }
     }
 
@@ -121,12 +130,30 @@ impl Registry {
     }
 
     pub fn register(&mut self, agent: &Agent) -> Result<(), RegistryError> {
-        if let Some(old_value) = self.agents.insert(agent.id, AgentDetails::new(agent.clone().event)) {
-            // Dual registration, Arc<Event> will, reset entry to old value, and return an error
-            self.agents.insert(agent.id, old_value);
+        // Ignore duplicate entries
+        if self.agents.contains_key(&agent.id) {
             return Err(RegistryError::DualRegistration);
         }
+
+        let agent_bit = self.allocate_bit()?;
+        self.agents.insert(agent.id, AgentDetails::new(agent.clone().event, agent_bit));
         Ok(())
+    }
+
+    /// Allocate a bit when an agent registers
+    /// Finds first available position
+    fn allocate_bit(&mut self) -> Result<u64, RegistryError> {
+        if self.allocated_bits == u64::MAX {
+            return Err(RegistryError::NoAvailablePosition);
+        }
+
+        // First 0 bit, and make that position this agent's mask
+        let bit_index = self.allocated_bits.trailing_ones();
+        let bit = 1u64 << bit_index;
+
+        // Take bit
+        self.allocated_bits |= bit;
+        Ok(bit)
     }
 
     pub fn unregister(&mut self, agent_id: &Uuid) -> Result<(), RegistryError> {
@@ -141,6 +168,14 @@ impl Registry {
         }
         self.agents.remove(agent_id);
         Ok(())
+    }
+
+    /// Deallocate bit when agent de-registers
+    /// Flip bit and make it available for next agent
+    /// Can't just deallocate in case someone else takes bit ownership - has to be called by the safeguard maybe?
+    /// Leave dead agent bits until the safeguard clears them?
+    fn deallocate_bit(&mut self, bit: u64) {
+        self.allocated_bits &= !bit;
     }
 
     pub fn get_agent_details(&self, agent_id: &Uuid) -> Result<&AgentDetails, RegistryError> {

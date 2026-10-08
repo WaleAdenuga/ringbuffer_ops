@@ -17,7 +17,7 @@ pub enum MessageTopic {
 }
 
 // Payload that'll be added to the buffer
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Message {
     pub topic: MessageTopic,
     pub message_id: u64,
@@ -52,6 +52,16 @@ impl Message {
             version,
             payload_len: 0, 
             payload: [0; MAX_PAYLOAD_SIZE]
+        })
+    }
+
+    pub fn empty() -> Result<Self, MessageError> {
+        Ok(Self { 
+            topic: MessageTopic::Undefined, 
+            message_id: u64::MAX, 
+            version: 0, 
+            payload_len: 0, 
+            payload: [0;MAX_PAYLOAD_SIZE] 
         })
     }
 
