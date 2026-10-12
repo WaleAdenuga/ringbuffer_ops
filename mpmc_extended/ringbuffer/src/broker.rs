@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::message::{Message, MessageTopic};
 use crate::buffer::RingBuffer;
-use crate::subscribe::{Registry, RegistryError};
+use crate::registry::{Registry, RegistryError};
 use crate::agent::Agent;
 
 // Broker - to deal with Buffer operations and the subscription registry
@@ -69,7 +69,11 @@ impl Broker {
 
         if let Some(subscribers) = registry.get_subscribers_for(&message.topic) { 
             // Only write message to buffer if there's someone listening
-            if self.buffer.try_write(message, subscribers.len()).is_err() {
+            if subscribers.len() <= 0 {
+                return Err(RegistryError::NoSubscriberForTopic);
+            }
+            let topic_reader_mask = registry.create_mask_from_subscribers(&message.topic)?;
+            if self.buffer.try_write(message, topic_reader_mask).is_err() {
                 return Err(RegistryError::PublishError);
             };
             
@@ -105,11 +109,10 @@ impl Broker {
             if let Ok(message) = self.buffer.try_read(&details.read_cursor) {                
                 if details.subscriptions.contains(&message.topic) {
                     // slot is readable, acknowledge
-                    let message_clone = message.clone();
-                    if self.buffer.update_after_read(current_cursor).is_ok() {
+                    if self.buffer.update_after_read(current_cursor, details.agent_bit).is_ok() {
                         // Update read_cursor
                         details.read_cursor.store(current_cursor + 1, Ordering::Release);
-                        return Ok(message_clone);
+                        return Ok(message);
                     } else {
                         return Err(RegistryError::ReadError);
                     }

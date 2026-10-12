@@ -1,5 +1,6 @@
 use std::{cell::UnsafeCell, sync::atomic::{AtomicU64, Ordering}};
 use crate::message::{Message};
+use crate::registry::AgentDetails;
 
 const BUFFER_SIZE: usize = 500;
 pub type ReaderMask = AtomicU64; // 64bit - 64 possible readers
@@ -98,41 +99,52 @@ impl RingBuffer {
         }
     }
 
-    /// Just returns reference to possible message in slot
-    /// Things like updating ref_count are handled by update_after_read
-    pub fn try_read(&self, read_cursor: &AtomicU64) -> Result<&Message, RingBufferError> {
-        let current_tail = read_cursor.load(Ordering::Acquire);
+    pub fn try_read(&self, agent_details: &AgentDetails) -> Result<Message, RingBufferError> {
+        loop {
+            let current_tail = agent_details.read_cursor.load(Ordering::Acquire);
 
-        let slot_index = (current_tail % (BUFFER_SIZE as u64)) as usize;
-        let current_seqno = self.buffer[slot_index].seqno.load(Ordering::Acquire);
-        
-        // Use difference as splitting point rather than head/tail semantics
-        let difference = current_seqno as i64 - (current_tail + 1) as i64;
-        if difference == 0 { // ready for consumers
-            // return reference to the value in slot, let the caller decide what to do with value
-            unsafe {
-                return Ok(&*self.buffer[slot_index].value.get());
-            };
-        } else if difference < 0 { // Value not published ==> empty
-            return Err(RingBufferError::BufferEmpty);
-        } else { // ==> slot is ahead, retry
-            return Err(RingBufferError::SlotAccessDenied);
+            let slot_index = (current_tail % (BUFFER_SIZE as u64)) as usize;
+            let current_seqno = self.buffer[slot_index].seqno.load(Ordering::Acquire);
+            
+            let difference = current_seqno as i64 - (current_tail + 1) as i64;
+            if difference == 0 { // ready for consumers
+                // Check if this is an eligible consumer for this slot
+                // Don't send unnecessary payloads and let the broker handle it
+                // pending readers is 110, bit is index 2, ==> 110 & 100 -> 100 -> message concerns you -> get copied messg
+                // pending readers is 101, bit is index 1, ==> 101 & 010 -> 000 -> message not for you -> continue scanning
+                let op = self.buffer[slot_index].pending_readers.load(Ordering::Acquire) & agent_details.agent_bit;
+                if op == 0 {
+                    self.advance_cursor(&agent_details.read_cursor);
+                    continue;
+                } else {
+                    unsafe {
+                        let message = *self.buffer[slot_index].value.get().clone();
+                        self.advance_cursor(&agent_details.read_cursor);
+                        
+                        let pending_readers = self.buffer[slot_index].pending_readers.fetch_and(!agent_details.agent_bit, Ordering::AcqRel);
+                        // If pending_readers is 1, advance seqno, and make slot available to producers
+                        // recall that fetch_and returns the previous value
+                        // if the previous value is the same as the agent_bit, then that guarantees this agent is the last reader.
+                        if pending_readers == agent_details.agent_bit {
+                            self.buffer[slot_index].seqno.store(agent_details.read_cursor.load(Ordering::Acquire) + (BUFFER_SIZE as u64), Ordering::Release);
+                        }
+                        return Ok(message);
+                    };
+                }
+            } else if difference < 0 { // Value not published ==> empty
+                return Err(RingBufferError::BufferEmpty);
+            } else { // ==> slot is ahead, fast-forward read_cursor by one generation
+                agent_details.read_cursor.fetch_add(BUFFER_SIZE as u64, Ordering::AcqRel);
+                continue;
+            }   
         }
     }
 
-    /// Multiple consumers can read, but not every message is useful (if not subscribed)
-    /// When a message is useful, we need to reset the bit (and) for that particular subscribed reader
-    /// And handle the situation where there's no one left to read, and we revert ownership to the producer
-    pub fn update_after_read(&self, read_cursor: u64,  agent_bit: u64) -> Result<(), RingBufferError> {
-        let slot_index = (read_cursor % (BUFFER_SIZE as u64)) as usize;
+    pub fn advance_cursor(&self, cursor: &AtomicU64) {
+        cursor.fetch_add(1, Ordering::Release);
+    }
 
-        let pending_readers = self.buffer[slot_index].pending_readers.fetch_and(!agent_bit, Ordering::AcqRel);
-        // If pending_readers is 1, advance seqno, and make slot available to producers
-        // recall that fetch_and returns the previous value
-        // if the previous value is the same as the agent_bit, then that guarantees this agent is the last reader.
-        if pending_readers == agent_bit {
-            self.buffer[slot_index].seqno.store(read_cursor + (BUFFER_SIZE as u64), Ordering::Release);
-        }
-        Ok(())
+    pub fn current_write_cursor(&self) -> Result<u64, RingBufferError> {
+        Ok(self.head.load(Ordering::Acquire))
     }
 }

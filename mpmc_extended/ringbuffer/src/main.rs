@@ -1,6 +1,6 @@
 pub mod buffer;
 pub mod message;
-pub mod subscribe;
+pub mod registry;
 pub mod agent;
 pub mod broker;
 

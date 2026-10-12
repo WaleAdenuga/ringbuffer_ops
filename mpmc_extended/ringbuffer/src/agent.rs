@@ -1,7 +1,7 @@
 use std::{sync::Arc};
 use uuid::Uuid;
 use event_listener::{Event, Listener};
-use crate::{broker::Broker, message::{Message, MessageTopic}, subscribe::RegistryError};
+use crate::{broker::Broker, message::{Message, MessageTopic}, registry::RegistryError};
 
 // Agents can both publish and consume - no need for explicit Subscriber struct
 #[derive(Clone)]

@@ -13,9 +13,9 @@ pub struct AgentDetails {
 }
 
 impl AgentDetails {
-    pub fn new(listener: Arc<Event>, agent_bit: u64) -> Self {
+    pub fn new(read_cursor: AtomicU64, listener: Arc<Event>, agent_bit: u64) -> Self {
         Self { 
-            read_cursor: AtomicU64::new(0), 
+            read_cursor, 
             subscriptions: HashSet::new(), 
             listener,
             agent_bit
@@ -60,7 +60,7 @@ impl Registry {
         }
     }
 
-    /// Handle a request to subscribe to a group
+    /// Handle a request to subscribe to a topic
     pub fn subscribe(&mut self, agent_id: &Uuid, topic: MessageTopic) -> Result<(), RegistryError> {
         if !self.agent_sanity(agent_id) {
             eprintln!("Agent is not recognized. Are you registered?");
@@ -116,6 +116,25 @@ impl Registry {
         self.registry.get(topic)
     }
 
+    /// Returns the list of agents subscribed to the given topic at that point in time
+    pub fn create_mask_from_subscribers(&self, topic: &MessageTopic) -> Result<u64, RegistryError> {
+        let mut topicmask: u64 = 0;
+        // Get subscribers for given topic
+        if let Some(subscribers) = self.registry.get(topic) {
+            for subscriber in subscribers {
+                // agent_bit returns that agent's index in the fixed u64 agent list right
+                // topic mask or that index should give the position of all readers for this topic
+                let Some(agent) = self.agents.get(subscriber) else {
+                    return Err(RegistryError::AgentNotRecognized);
+                };
+                topicmask |= agent.agent_bit;
+            }
+        } else {
+            return Err(RegistryError::NoSubscriberForTopic);
+        }
+        Ok(topicmask)
+    }
+
     pub fn notify_subscriber(&self, subscriber_uuid: &Uuid) {
         // Get subscriber event
         let agent_details = self.agents.get(subscriber_uuid).unwrap();
@@ -167,6 +186,8 @@ impl Registry {
             value.retain(|uuid| *uuid != *agent_id); 
         }
         self.agents.remove(agent_id);
+
+        // TODO - Deallocate the agent bit
         Ok(())
     }
 
