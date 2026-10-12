@@ -69,7 +69,8 @@ impl Broker {
 
         if let Some(subscribers) = registry.get_subscribers_for(&message.topic) { 
             // Only write message to buffer if there's someone listening
-            if self.buffer.try_write(message, subscribers.len()).is_err() {
+            let topic_reader_mask = registry.create_mask_from_subscribers(&message.topic)?;
+            if self.buffer.try_write(message, topic_reader_mask).is_err() {
                 return Err(RegistryError::PublishError);
             };
             
@@ -106,7 +107,7 @@ impl Broker {
                 if details.subscriptions.contains(&message.topic) {
                     // slot is readable, acknowledge
                     let message_clone = message.clone();
-                    if self.buffer.update_after_read(current_cursor).is_ok() {
+                    if self.buffer.update_after_read(current_cursor, details.agent_bit).is_ok() {
                         // Update read_cursor
                         details.read_cursor.store(current_cursor + 1, Ordering::Release);
                         return Ok(message_clone);
