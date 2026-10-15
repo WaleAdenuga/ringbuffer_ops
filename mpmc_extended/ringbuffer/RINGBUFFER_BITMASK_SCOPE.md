@@ -1090,6 +1090,13 @@ remain a host-test-only possibility.
 
 ### Replay API boundary
 
+**Current prototype decision (supersedes the options below):** journal spill uses
+a dedicated recovery event and an explicit `read_journal()` batch API. Live
+`read()` remains ring-only and owns the live cursor; journal reads do not advance
+that cursor. The recovery channel does not promise merged live/journal receive
+order, so journal entries retain ticket, message ID, and timestamp for consumers
+that need chronology.
+
 **Option A — transparent replay (recommended):** `Broker::read()` detects a
 journal gap, replays it, deduplicates by sequence, and returns ordinary
 messages to the agent.
