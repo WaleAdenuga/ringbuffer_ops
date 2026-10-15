@@ -17,7 +17,7 @@ pub enum MessageTopic {
 }
 
 // Payload that'll be added to the buffer
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Message {
     pub topic: MessageTopic,
     pub message_id: u64,

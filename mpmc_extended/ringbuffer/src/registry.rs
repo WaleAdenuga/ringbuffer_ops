@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, eprintln, sync::{Arc, atomic::{AtomicU64, Ordering}}};
+use std::{collections::{HashMap}, eprintln, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}};
 use uuid::Uuid;
 use crate::message::{MessageTopic};
 use event_listener::{Event};
@@ -7,18 +7,24 @@ use crate::agent::Agent;
 #[derive(Debug)]
 pub struct AgentDetails {
     pub read_cursor: AtomicU64,
-    pub subscriptions: HashSet<MessageTopic>,
     pub listener: Arc<Event>,
     pub agent_bit: u64,
+    pub agent_state: Mutex<AgentState>, // created for lifecycle - and handling race conditions
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentState {
+    Active,
+    Draining,
+    Removed,
 }
 
 impl AgentDetails {
     pub fn new(read_cursor: AtomicU64, listener: Arc<Event>, agent_bit: u64) -> Self {
         Self { 
             read_cursor, 
-            subscriptions: HashSet::new(), 
             listener,
-            agent_bit
+            agent_bit,
+            agent_state: AgentState::Active.into(),
         }
     }
 }
@@ -27,7 +33,7 @@ impl AgentDetails {
 pub struct Registry {
     // map of all agents subscribed to a topic
     registry: HashMap<MessageTopic, Vec<Uuid>>,
-    agents: HashMap<Uuid, AgentDetails>, // Keep register of all agents
+    agents: HashMap<Uuid, Arc<AgentDetails>>, // Keep register of all agents
 
     // free/allocated bits
     // 1 - position is occupied
@@ -42,11 +48,15 @@ pub enum RegistryError {
     DualRegistration,
     DualTopicSubscription,
     PublishError,
-    ReadError,
+    NoAvailableRead,
+    DrainError,
     NoSubscriberForTopic,
     AgentNotRecognized,
     AgentNotSubscribed,
     AgentNotReachable,
+    AgentDisconnecting,
+    BufferPressure,
+
     NoAvailablePosition,
 }
 
@@ -70,23 +80,16 @@ impl Registry {
             eprintln!("Please define a valid message topic");
             return Err(RegistryError::InvalidMetaData);
         }
+
         // Add to internal registry - But first prevent dual subscription
         if let Some(value) = self.registry.get(&topic) {
             if value.contains(agent_id) {
                 return Err(RegistryError::DualTopicSubscription);
             }
         }
-        
-        // also add to agents structure
-        if let Some(details) = self.agents.get_mut(agent_id) {
-            details.subscriptions.insert(topic); // sets are unique - fails if already present - non fatal
-        } else { // is this necessary? agent_sanity might cover it
-            eprintln!("Did you register this agent? We don't recognize it");
-            return Err(RegistryError::AgentNotRecognized);
-        }
         // Add to internal registry if agent update is successful
         self.registry.entry(topic).or_insert_with(Vec::new).push(*agent_id);
-        Ok(())
+        Ok(()) //agent_state is dropped
     }
 
     pub fn unsubscribe(&mut self, agent_id: &Uuid, topic: MessageTopic) -> Result<(), RegistryError> {
@@ -97,11 +100,6 @@ impl Registry {
         if topic == MessageTopic::Undefined {
             eprintln!("Please define a valid message topic");
             return Err(RegistryError::InvalidMetaData);
-        }
-
-        // Remove subscription from agent registry
-        if let Some(details) = self.agents.get_mut(agent_id) {
-            details.subscriptions.remove(&topic);
         }
 
         // Remove from internal registry
@@ -155,7 +153,9 @@ impl Registry {
         }
 
         let agent_bit = self.allocate_bit()?;
-        self.agents.insert(agent.id, AgentDetails::new(agent.clone().event, agent_bit));
+        let agent_cursor = AtomicU64::new(agent.broker.current_write_cursor());
+        let agent_details = Arc::new(AgentDetails::new(agent_cursor,agent.clone().event, agent_bit));
+        self.agents.insert(agent.id, agent_details);
         Ok(())
     }
 
@@ -175,7 +175,7 @@ impl Registry {
         Ok(bit)
     }
 
-    pub fn unregister(&mut self, agent_id: &Uuid) -> Result<(), RegistryError> {
+    pub fn start_unregister(&mut self, agent_id: &Uuid) -> Result<(), RegistryError> {
         if !self.agent_sanity(agent_id) {
             eprintln!("Agent is not recognized. Are you registered?");
             return Err(RegistryError::AgentNotRecognized);
@@ -185,9 +185,13 @@ impl Registry {
             // retain removes all elements for which the function returns false
             value.retain(|uuid| *uuid != *agent_id); 
         }
-        self.agents.remove(agent_id);
+        Ok(())
+    }
 
-        // TODO - Deallocate the agent bit
+    pub fn finish_unregister(&mut self, agent_id: &Uuid) -> Result<(), RegistryError> {
+        // remove returns the value that was present at the key
+        let details = self.agents.remove(agent_id).ok_or(RegistryError::AgentNotRecognized)?;
+        self.deallocate_bit(details.agent_bit);
         Ok(())
     }
 
@@ -199,14 +203,14 @@ impl Registry {
         self.allocated_bits &= !bit;
     }
 
-    pub fn get_agent_details(&self, agent_id: &Uuid) -> Result<&AgentDetails, RegistryError> {
+    pub fn get_agent_details(&self, agent_id: &Uuid) -> Result<Arc<AgentDetails>, RegistryError> {
         if !self.agent_sanity(agent_id) {
             eprintln!("Agent is not recognized. Are you registered?");
             return Err(RegistryError::AgentNotRecognized);
         }
         
         // shouldn't panic since we check sanity above
-        Ok(self.agents.get(agent_id).unwrap())
+        Ok(self.agents.get(agent_id).unwrap().clone())
     }
 
     pub fn update_read_cursor(&mut self, agent_id: &Uuid, new_cursor: u64) -> Result<(), RegistryError> {

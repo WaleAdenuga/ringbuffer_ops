@@ -31,7 +31,7 @@ impl Agent {
         self.broker.read(&self.id)
     }
 
-    pub fn publish(&self, message: Message) -> Result<(), RegistryError> {
+    pub fn publish(&self, message: Message) -> Result<(), (RegistryError, Message)> {
         self.broker.publish(&self.id, message)
     }
 
