@@ -106,23 +106,23 @@ impl Broker {
             // in loop because read_cursor should change if current slot is useless
             let details = registry.get_agent_details(agent_id).unwrap();
             let current_cursor = details.read_cursor.load(Ordering::Acquire);
-            if let Ok(message) = self.buffer.try_read(&details.read_cursor) {                
-                if details.subscriptions.contains(&message.topic) {
-                    // slot is readable, acknowledge
-                    if self.buffer.update_after_read(current_cursor, details.agent_bit).is_ok() {
-                        // Update read_cursor
-                        details.read_cursor.store(current_cursor + 1, Ordering::Release);
-                        return Ok(message);
-                    } else {
-                        return Err(RegistryError::ReadError);
-                    }
-                }
-                // Update read_cursor regardless of subscription
-                details.read_cursor.store(current_cursor + 1, Ordering::Release);
-                continue; // try to read again
-            } else {
-                return Err(RegistryError::ReadError);
-            } 
+            // if let Ok(message) = self.buffer.try_read(&details.read_cursor) {                
+            //     if details.subscriptions.contains(&message.topic) {
+            //         // slot is readable, acknowledge
+            //         if self.buffer.update_after_read(current_cursor, details.agent_bit).is_ok() {
+            //             // Update read_cursor
+            //             details.read_cursor.store(current_cursor + 1, Ordering::Release);
+            //             return Ok(message);
+            //         } else {
+            //             return Err(RegistryError::ReadError);
+            //         }
+            //     }
+            //     // Update read_cursor regardless of subscription
+            //     details.read_cursor.store(current_cursor + 1, Ordering::Release);
+            //     continue; // try to read again
+            // } else {
+            //     return Err(RegistryError::ReadError);
+            // } 
         }
     }
 

@@ -155,7 +155,7 @@ impl Registry {
         }
 
         let agent_bit = self.allocate_bit()?;
-        self.agents.insert(agent.id, AgentDetails::new(agent.clone().event, agent_bit));
+        //self.agents.insert(agent.id, AgentDetails::new(agent.clone().event, agent_bit));
         Ok(())
     }
 
